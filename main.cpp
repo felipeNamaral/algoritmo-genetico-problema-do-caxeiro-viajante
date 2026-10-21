@@ -7,7 +7,8 @@
 #include <time.h>
 #define numCidades 10
 #define populacao 100
-#define maximogeracao 1000
+#define maximogeracao 500
+#define taxaMutacao 0.05f
 
 struct individuo  
 {
@@ -15,6 +16,47 @@ struct individuo
     float fitness;
 
 };
+
+struct AnimacaoRota {
+    individuo melhor{};
+    double inicio = 0.0;
+    bool ativa = false;
+};
+
+// Desenha o caminho aos poucos, incluindo o retorno para a primeira cidade.
+// Chame a cada quadro, antes de desenhar as cidades.
+void animaRota(const AnimacaoRota& animacao,
+               const std::array<Cidades, numCidades>& cidades, Color cor,float velocidade) {
+    if (!animacao.ativa) return;
+    float restante = velocidade <= 0.0f
+    ? INFINITY
+    : static_cast<float>(GetTime() - animacao.inicio) * velocidade;
+
+    for (int i = 0; i < numCidades; i++) {
+        const Cidades& origem = cidades[animacao.melhor.rota[i]];
+        const Cidades& destino = cidades[animacao.melhor.rota[(i + 1) % numCidades]];
+        Vector2 inicio{origem.getX(), origem.getY()};
+        Vector2 fim{destino.getX(), destino.getY()};
+        float dx = fim.x - inicio.x;
+        float dy = fim.y - inicio.y;
+        float distancia = std::sqrt(dx * dx + dy * dy);
+
+        if (restante >= distancia) {
+            DrawLineEx(inicio, fim, 4.0f, cor);
+            restante -= distancia;
+        } else {
+            float progresso = restante / distancia;
+            Vector2 ponta{inicio.x + dx * progresso, inicio.y + dy * progresso};
+            DrawLineEx(inicio, ponta, 4.0f, cor);
+            DrawCircleV(ponta, 7.0f, cor);
+            break;
+        }
+    }
+
+    const Cidades& primeira = cidades[animacao.melhor.rota[0]];
+    DrawCircleLines(static_cast<int>(primeira.getX()),
+                    static_cast<int>(primeira.getY()), 25.0f, cor);
+}
 
 
 void IniciaPopulacao(std::array<int, numCidades>* rota) {
@@ -94,6 +136,22 @@ individuo cruzamento(individuo pai1, individuo pai2, std::array<Cidades, numCida
     return filho;
 }
 
+void mutacao(individuo& filho) {
+    float sorteio = static_cast<float>(rand()) / (RAND_MAX + 1.0);
+
+    if (sorteio < taxaMutacao) {
+        int pos1 = rand() % numCidades;
+        int pos2;
+
+        do {
+            pos2 = rand() % numCidades;
+        } while (pos1 == pos2);
+
+        std::swap(filho.rota[pos1], filho.rota[pos2]);
+    }
+}
+
+
 
 individuo buscaGenetica(std::array<Cidades, numCidades> cidades){
     
@@ -114,9 +172,38 @@ individuo buscaGenetica(std::array<Cidades, numCidades> cidades){
         selecao(&rotas, &pai1, &pai2);
 
         for(int i = 0; i < populacao; i++){
-            novaPopulacao[i] = cruzamento(pai1, pai2, cidades);
+               novaPopulacao[i] = cruzamento(pai1, pai2, cidades);
+            mutacao(novaPopulacao[i]);
         }
+
         rotas = novaPopulacao;
+
+        avaliafitiness(&rotas, cidades);
+
+        individuo melhor, segundo;
+        selecao(&rotas, &melhor, &segundo);
+        AnimacaoRota animacao;
+        animacao.melhor = melhor;
+        animacao.inicio = GetTime(); 
+        animacao.ativa = true;
+
+        BeginDrawing();
+        ClearBackground(Color{20, 20, 30, 255});
+
+        for (const Cidades& cidade : cidades) {
+            DrawCircle(cidade.getX(), cidade.getY(), 20, cidade.getCor());
+
+            DrawText(TextFormat("%d", cidade.getId()),
+                    cidade.getX() - 6, cidade.getY() - 10,
+                    20, BLACK);
+        }
+
+        DrawText(TextFormat("Geracao: %d | Distancia: %.2f",
+                            i + 1, melhor.fitness),
+                20, 20, 20, WHITE);
+        animaRota(animacao, cidades, GREEN, 0.0f);
+
+        EndDrawing();
     }
 
     // Avalia a ultima geracao e retorna seu melhor individuo
@@ -127,6 +214,7 @@ individuo buscaGenetica(std::array<Cidades, numCidades> cidades){
 
     return melhor;
 }
+
 
 int main()
 {
@@ -164,7 +252,21 @@ int main()
 
 
 
+    AnimacaoRota animacaoAleatoria;
+    AnimacaoRota animacaoBenchmark;
+
     while (!WindowShouldClose()) {
+
+        if (IsKeyPressed(KEY_A)) {
+            animacaoAleatoria.melhor = buscaGenetica(cidades);
+            animacaoAleatoria.inicio = GetTime();
+            animacaoAleatoria.ativa = true;
+        }
+        if (IsKeyPressed(KEY_B)) {
+            animacaoBenchmark.melhor = buscaGenetica(cidadesBenchmark);
+            animacaoBenchmark.inicio = GetTime();
+            animacaoBenchmark.ativa = true;
+        }
 
         BeginDrawing();
         ClearBackground(Color{20, 20, 30, 255});
@@ -182,6 +284,19 @@ int main()
         DrawLine(meio, 0, meio, GetScreenHeight(), GRAY);
         DrawText("Aleatorio", 20, 20, 30, WHITE);
         DrawText("Benchmark", meio + 20, 20, 30, WHITE);
+        DrawText("A: buscar e animar rota", 20, 60, 20, LIGHTGRAY);
+        DrawText("B: buscar e animar rota", meio + 20, 60, 20, LIGHTGRAY);
+
+        animaRota(animacaoAleatoria, cidades, GREEN, 350.0f);
+        animaRota(animacaoBenchmark, cidadesBenchmark, SKYBLUE, 350.0f);
+        if (animacaoAleatoria.ativa) {
+            DrawText(TextFormat("Distancia: %.2f", animacaoAleatoria.melhor.fitness),
+                     20, 90, 20, GREEN);
+        }
+        if (animacaoBenchmark.ativa) {
+            DrawText(TextFormat("Distancia: %.2f", animacaoBenchmark.melhor.fitness),
+                     meio + 20, 90, 20, SKYBLUE);
+        }
 
         for(int i = 0; i < numCidades; i++) {
             // Desenhar as cidades
@@ -194,19 +309,6 @@ int main()
             DrawCircle(cidadesBenchmark[i].getX(), cidadesBenchmark[i].getY(), 20, cidadesBenchmark[i].getCor());
             DrawText(TextFormat("%d", cidadesBenchmark[i].getId()),cidadesBenchmark[i].getX()-6, cidadesBenchmark[i].getY()-10, 20, BLACK);
         }        
-
-
-        if (IsKeyPressed(KEY_A)){
-            individuo melhor = buscaGenetica(cidades);
-            
-        }
-
-        if(IsKeyPressed(KEY_B)){
-            individuo melhor = buscaGenetica(cidadesBenchmark);
-        }
-
-
-
 
         EndDrawing();
     }
