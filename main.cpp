@@ -5,10 +5,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#define numCidades 10
-#define populacao 100
-#define maximogeracao 500
+#include <algorithm>
+
+
+#define numCidades 50
+#define populacao 300
+#define maximogeracao 3500
 #define taxaMutacao 0.05f
+#define tamanhoTorneio 3
+#define elitismo 8
+#define limiteEstagnacao 400
 
 struct individuo  
 {
@@ -82,25 +88,37 @@ void avaliafitiness(std::array<individuo, populacao>* rotas,std::array<Cidades, 
     }
 }
 
-void selecao(std::array<individuo, populacao>* rotas, individuo* pai1, individuo* pai2){
-    // Seleciona os dois melhores indivíduos da população
-    *pai1 = (*rotas)[0];
-    *pai2 = (*rotas)[1];
-    if (pai2->fitness < pai1->fitness) {
-        std::swap(*pai1, *pai2);
-    }
-    for (int i = 2; i < populacao; i++) {
-        if ((*rotas)[i].fitness < pai1->fitness) {
-            *pai2 = *pai1;
-            *pai1 = (*rotas)[i];
-        } else if ((*rotas)[i].fitness < pai2->fitness) {
-            *pai2 = (*rotas)[i];
+// Realiza um torneio selecionando aleatoriamente 'k' indivíduos e retorna o de menor fitness
+individuo torneio(const std::array<individuo, populacao>& rotas, int k = tamanhoTorneio) {
+    int melhorIdx = rand() % populacao;
+    for (int i = 1; i < k; i++) {
+        int sorteado = rand() % populacao;
+        if (rotas[sorteado].fitness < rotas[melhorIdx].fitness) {
+            melhorIdx = sorteado;
         }
-    }    
+    }
+    return rotas[melhorIdx];
+}
+
+// Seleção por torneio: seleciona os 2 pais disputando torneios independentes
+void selecao(const std::array<individuo, populacao>* rotas, individuo* pai1, individuo* pai2) {
+    *pai1 = torneio(*rotas);
+    *pai2 = torneio(*rotas);
+}
+
+// Retorna o melhor indivíduo da população (menor distância/fitness)
+individuo obterMelhor(const std::array<individuo, populacao>& rotas) {
+    individuo melhor = rotas[0];
+    for (int i = 1; i < populacao; i++) {
+        if (rotas[i].fitness < melhor.fitness) {
+            melhor = rotas[i];
+        }
+    }
+    return melhor;
 }
  
 
-individuo cruzamento(individuo pai1, individuo pai2, std::array<Cidades, numCidades> cidades) {
+individuo cruzamento(individuo pai1, individuo pai2) {
     individuo filho{};
     std::array<bool, numCidades> usada{};
 
@@ -128,11 +146,6 @@ individuo cruzamento(individuo pai1, individuo pai2, std::array<Cidades, numCida
         }
     }
 
-    for (int i = 0; i < numCidades; i++) {
-        float dx = cidades[filho.rota[i]].getX() - cidades[filho.rota[(i + 1) % numCidades]].getX();
-        float dy = cidades[filho.rota[i]].getY() - cidades[filho.rota[(i + 1) % numCidades]].getY();
-        filho.fitness += std::sqrt(dx * dx + dy * dy);
-    }
     return filho;
 }
 
@@ -152,36 +165,95 @@ void mutacao(individuo& filho) {
 }
 
 
+void elitismofunc(std::array<individuo, populacao>* novaPopulacao, std::array<individuo, populacao> rotas){
 
-individuo buscaGenetica(std::array<Cidades, numCidades> cidades){
+
+    std::sort(rotas.begin(), rotas.end(), [](const individuo& a, const individuo& b) {
+        return a.fitness < b.fitness;
+    });
+
+    for(int i = 0; i < elitismo; i++){
+        (*novaPopulacao)[i] = rotas[i];
+    }
+}
+
+
+
+individuo buscaGenetica(std::array<Cidades, numCidades> cidades, const char* tipoBusca = "Cidades Aleatorias", const char* tag = "BUSCA A", int idExecucao = 1){
     
     // gera rotas da pupulação 
     std::array<individuo, populacao> rotas; 
     std::array<individuo, populacao> novaPopulacao;
 
+    individuo melhorGlobal;
+    
+
+    int totalMelhorias = 0;
+    int geracoesExecutadas = 0;
+    bool estagnou = false;
+
+    printf("\n==================================================\n");
+    printf("[%s #%d] Iniciando busca: %s\n", tag, idExecucao, tipoBusca);
+    printf("[%s #%d][CONFIG] Cidades: %d | Populacao: %d | Taxa Mutacao: %.2f | Elitismo: %d | Max Geracoes: %d | Limite Estagnacao: %d\n",
+           tag, idExecucao, numCidades, populacao, taxaMutacao, elitismo, maximogeracao, limiteEstagnacao);
+    printf("==================================================\n");
+    fflush(stdout);
+
+    // inicializa a população com rotas aleatórias
     for(int i = 0; i < populacao; i++){
         IniciaPopulacao(&rotas[i].rota);
     }
+    //avalia as rotas e calcula o fitness
+    avaliafitiness(&rotas, cidades);
+    melhorGlobal = obterMelhor(rotas);
 
-    for(int i = 0; i<maximogeracao;i++){
-        //avalia as rotas e calcula o fitness
-        avaliafitiness(&rotas, cidades);
 
-        individuo pai1,pai2;
+    // loop de gerações
+    for(int i = 0, geracoesSemMelhora = 0; i < maximogeracao && geracoesSemMelhora < limiteEstagnacao; i++, geracoesSemMelhora++){
 
-        selecao(&rotas, &pai1, &pai2);
+        //elitismo: copia o melhor individuo para a nova população
+        elitismofunc(&novaPopulacao, rotas);
 
-        for(int i = 0; i < populacao; i++){
-               novaPopulacao[i] = cruzamento(pai1, pai2, cidades);
-            mutacao(novaPopulacao[i]);
+        for(int j = elitismo; j < populacao; j++){
+            individuo pai1, pai2;
+            selecao(&rotas, &pai1, &pai2);
+            novaPopulacao[j] = cruzamento(pai1, pai2);
+            mutacao(novaPopulacao[j]);
         }
+
 
         rotas = novaPopulacao;
 
         avaliafitiness(&rotas, cidades);
 
-        individuo melhor, segundo;
-        selecao(&rotas, &melhor, &segundo);
+        individuo melhor = obterMelhor(rotas);
+        if(melhor.fitness < melhorGlobal.fitness){
+            if(totalMelhorias == 0){
+                printf("[%s][MELHORIA] Geracao %d | Inicializacao do melhor global: %.2f\n",
+                       tag, i + 1, melhor.fitness);
+            } else {
+                float distanciaAnterior = melhorGlobal.fitness;
+                float progresso = distanciaAnterior - melhor.fitness;
+                printf("[%s][MELHORIA] Geracao %d | Anterior: %.2f -> Nova: %.2f | Progresso: %.2f\n",
+                       tag, i + 1, distanciaAnterior, melhor.fitness, progresso);
+            }
+            totalMelhorias++;
+            melhorGlobal = melhor;
+            geracoesSemMelhora = -1; 
+        }
+
+        geracoesExecutadas = i + 1;
+        int semMelhoraAtual = (geracoesSemMelhora == -1) ? 0 : (geracoesSemMelhora + 1);
+
+        if((i + 1) % 10 == 0){
+            printf("[%s][GERACAO] Geracao %d | Melhor Atual: %.2f | Melhor Global: %.2f | Sem Melhora: %d\n",
+                   tag, i + 1, melhor.fitness, melhorGlobal.fitness, semMelhoraAtual);
+        }
+
+        if(geracoesSemMelhora + 1 >= limiteEstagnacao){
+            estagnou = true;
+        }
+
         AnimacaoRota animacao;
         animacao.melhor = melhor;
         animacao.inicio = GetTime(); 
@@ -206,13 +278,18 @@ individuo buscaGenetica(std::array<Cidades, numCidades> cidades){
         EndDrawing();
     }
 
-    // Avalia a ultima geracao e retorna seu melhor individuo
-    avaliafitiness(&rotas, cidades);
+    if(estagnou){
+        printf("[%s][ESTAGNACAO] Limite de %d geracoes sem melhoria atingido na geracao %d. Melhor fitness: %.2f\n",
+               tag, limiteEstagnacao, geracoesExecutadas, melhorGlobal.fitness);
+    }
 
-    individuo melhor, segundoMelhor;
-    selecao(&rotas, &melhor, &segundoMelhor);
+    printf("[%s][FIM] Motivo: %s | Total geracoes: %d | Melhor distancia global: %.2f | Total melhorias: %d\n",
+           tag, (estagnou ? "Estagnacao" : "Limite maximo de geracoes atingido"),
+           geracoesExecutadas, melhorGlobal.fitness, totalMelhorias);
+    printf("==================================================\n\n");
+    fflush(stdout);
 
-    return melhor;
+    return melhorGlobal;
 }
 
 
@@ -255,15 +332,20 @@ int main()
     AnimacaoRota animacaoAleatoria;
     AnimacaoRota animacaoBenchmark;
 
+    int execucaoA = 0;
+    int execucaoB = 0;
+
     while (!WindowShouldClose()) {
 
         if (IsKeyPressed(KEY_A)) {
-            animacaoAleatoria.melhor = buscaGenetica(cidades);
+            execucaoA++;
+            animacaoAleatoria.melhor = buscaGenetica(cidades, "Cidades Aleatorias", "BUSCA A", execucaoA);
             animacaoAleatoria.inicio = GetTime();
             animacaoAleatoria.ativa = true;
         }
         if (IsKeyPressed(KEY_B)) {
-            animacaoBenchmark.melhor = buscaGenetica(cidadesBenchmark);
+            execucaoB++;
+            animacaoBenchmark.melhor = buscaGenetica(cidadesBenchmark, "Circulo (Benchmark)", "BUSCA B", execucaoB);
             animacaoBenchmark.inicio = GetTime();
             animacaoBenchmark.ativa = true;
         }
